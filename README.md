@@ -112,7 +112,8 @@ start, so a worker runs merged code under the project's merged config;
 it rolls from (a fetch into refs the gating checkout shares would race
 the entry's own); `state.json`; and `logs/` (`worker.log`, `ships.tsv`,
 each roll's log). It loads the primary checkout's `.env`, runs `mix run`
-under `caffeinate -i`, and stops once the queue has been empty, with no
+under `caffeinate -i` in its own session (an agent harness kills the
+process group of a command when it ends), and stops once the queue has been empty, with no
 roll running or waiting, for a minute. The next ship starts it on fresh
 code.
 

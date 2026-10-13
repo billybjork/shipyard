@@ -17,7 +17,8 @@
 # worktree of the project clone, .../entry, and rolls from a second clone,
 # .../roll, which its first roll makes. None is a worktree of a working
 # checkout. It loads the primary checkout's .env (the roll's settings and
-# NTFY_TOPIC), holds `caffeinate -i` where there is one, logs to
+# NTFY_TOPIC), runs in its own session (so it outlives the command that
+# started it), holds `caffeinate -i` where there is one, logs to
 # .../logs/worker.log, and exits once the queue is empty and no roll runs or
 # waits. `--if-queued` starts it only when a PR carries the `ship` label.
 set -euo pipefail
@@ -109,7 +110,11 @@ start() {
     export SHIPYARD_CONFIG=$repo/.shipyard.json SHIPYARD_HOME=$home
     keep=()
     command -v caffeinate >/dev/null && keep=(caffeinate -i)
-    nohup ${keep[@]+"${keep[@]}"} mix run --no-halt >>"$home/logs/worker.log" 2>&1 </dev/null &
+    # Its own session, so it outlives whatever started it: an agent harness
+    # kills a command's process group when the command ends. macOS has no
+    # setsid binary; perl's exec keeps the pid that worker.pid records.
+    nohup perl -MPOSIX=setsid -e 'setsid() or die "setsid: $!\n"; exec @ARGV or die "exec: $!\n"' \
+      ${keep[@]+"${keep[@]}"} mix run --no-halt >>"$home/logs/worker.log" 2>&1 </dev/null &
     echo $! >"$home/worker.pid"
   )
   say "$name: started (pid $(cat "$home/worker.pid")) at $(git -C "$repo" rev-parse --short HEAD), worker $(git -C "$app" rev-parse --short HEAD); log: $home/logs/worker.log"
