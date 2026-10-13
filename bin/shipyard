@@ -1,0 +1,144 @@
+#!/usr/bin/env bash
+# The ship worker's launcher (README.md). A project is a git checkout with a
+# `.shipyard.json` at its root; <project> is any checkout of it (a linked
+# worktree is fine).
+#
+#   bin/shipyard start <project> [--if-queued]   start its worker unless one runs
+#   bin/shipyard poll                            start --if-queued for each
+#                                                project in ~/.config/shipyard/projects
+#   bin/shipyard list <project> [--summary [since]]
+#   bin/shipyard wait <project> <pr>             exit 0 only when the ship is live
+#   bin/shipyard check                           this repository's own gate
+#
+# `start` returns at once. The worker runs from its own clone of this
+# repository, ~/.cache/shipyard/<name>/app, and its own clone of the project,
+# .../repo, both reset to origin/main at every start, so it runs merged code
+# under the project's merged config. It gates each entry in a linked
+# worktree of the project clone, .../entry, and rolls from a second clone,
+# .../roll, which its first roll makes. None is a worktree of a working
+# checkout. It loads the primary checkout's .env (the roll's settings and
+# NTFY_TOPIC), holds `caffeinate -i` where there is one, logs to
+# .../logs/worker.log, and exits once the queue is empty and no roll runs or
+# waits. `--if-queued` starts it only when a PR carries the `ship` label.
+set -euo pipefail
+
+self=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+say() { echo "shipyard: $*"; }
+die() { echo "shipyard: $*" >&2; exit 64; }
+usage() { sed -n '5,10p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 64; }
+
+# The project checkout's toplevel and its config's fields.
+project() {
+  [ -n "${1:-}" ] || usage
+  top=$(git -C "$1" rev-parse --show-toplevel 2>/dev/null) || die "$1 is not a git checkout"
+  config=$top/.shipyard.json
+  [ -f "$config" ] || die "$top has no .shipyard.json"
+  name=$(jq -er .name "$config") || die "$config names no project"
+  slug=$(jq -er .repo "$config") || die "$config names no repo"
+  home=$HOME/.cache/shipyard/$name
+}
+
+# The app in $1, compiled for `mix run` or a task, with this repository's
+# toolchain (its .tool-versions), not the project's.
+mix_in() {
+  local dir=$1
+  shift
+  (cd "$dir" && unset MIX_ENV && mix "$@")
+}
+
+start() {
+  local if_queued=false
+  project "${1:-}"
+  case "${2:-}" in
+    "") ;;
+    --if-queued) if_queued=true ;;
+    *) usage ;;
+  esac
+
+  # The worker gates on the project's Sprite pool through this machine's
+  # `sprite` login; a machine without it leaves the PR queued.
+  if ! command -v sprite >/dev/null; then
+    say "no sprite CLI on this machine; the PR waits in the queue for the laptop's worker"
+    exit 0
+  fi
+
+  mkdir -p "$home/logs"
+  local lock=$home/start.lock
+  for _ in $(seq 100); do mkdir "$lock" 2>/dev/null && break || sleep 0.2; done
+  [ -d "$lock" ] || { say "$lock is held; remove it if no start is under way"; exit 1; }
+  trap 'rmdir "$lock"' EXIT
+
+  if [ -f "$home/worker.pid" ] && kill -0 "$(cat "$home/worker.pid")" 2>/dev/null; then
+    [ "$if_queued" = true ] || say "$name: running (pid $(cat "$home/worker.pid")); it takes the PR from the queue"
+    exit 0
+  fi
+
+  # A labeled PR is open in the queue, or merged and waiting for its roll.
+  if [ "$if_queued" = true ] &&
+    [ -z "$(gh pr list --repo "$slug" --label ship --state all --json number,state --jq '.[] | select(.state != "CLOSED") | .number')" ]; then
+    exit 0
+  fi
+
+  local repo=$home/repo entry=$home/entry app=$home/app
+  local origin self_origin primary
+  origin=$(git -C "$top" remote get-url origin)
+  self_origin=$(git -C "$self" remote get-url origin)
+  primary=$(cd "$(git -C "$top" rev-parse --path-format=absolute --git-common-dir)/.." && pwd)
+
+  [ -d "$repo/.git" ] || git clone -q "$origin" "$repo"
+  git -C "$repo" fetch -q origin
+  git -C "$repo" checkout -q --force --detach origin/main
+  [ -f "$repo/.shipyard.json" ] || die "origin/main of $slug has no .shipyard.json yet"
+  [ -d "$entry" ] || git -C "$repo" worktree add -q --detach "$entry" origin/main
+
+  [ -d "$app/.git" ] || git clone -q "$self_origin" "$app"
+  git -C "$app" fetch -q origin
+  git -C "$app" checkout -q --force --detach origin/main
+  mix_in "$app" compile >>"$home/logs/worker.log" 2>&1 || die "the worker does not compile; see $home/logs/worker.log"
+
+  (
+    cd "$app"
+    if [ -f "$primary/.env" ]; then
+      set -a
+      # shellcheck disable=SC1091
+      . "$primary/.env"
+      set +a
+    fi
+    unset MIX_ENV
+    export SHIPYARD_CONFIG=$repo/.shipyard.json SHIPYARD_HOME=$home
+    keep=()
+    command -v caffeinate >/dev/null && keep=(caffeinate -i)
+    nohup ${keep[@]+"${keep[@]}"} mix run --no-halt >>"$home/logs/worker.log" 2>&1 </dev/null &
+    echo $! >"$home/worker.pid"
+  )
+  say "$name: started (pid $(cat "$home/worker.pid")) at $(git -C "$repo" rev-parse --short HEAD), worker $(git -C "$app" rev-parse --short HEAD); log: $home/logs/worker.log"
+}
+
+case "${1:-}" in
+  start)
+    shift
+    start "$@"
+    ;;
+  poll)
+    list=$HOME/.config/shipyard/projects
+    [ -f "$list" ] || exit 0
+    while IFS= read -r dir; do
+      case "$dir" in "" | \#*) continue ;; esac
+      "${BASH_SOURCE[0]}" start "${dir/#\~/$HOME}" --if-queued || say "starting $dir failed"
+    done <"$list"
+    ;;
+  list)
+    project "${2:-}"
+    shift 2
+    SHIPYARD_CONFIG=$config mix_in "$self" shipyard.list "$@"
+    ;;
+  wait)
+    project "${2:-}"
+    [ -n "${3:-}" ] || usage
+    SHIPYARD_CONFIG=$config mix_in "$self" shipyard.wait "$3"
+    ;;
+  check)
+    mix_in "$self" check
+    ;;
+  *) usage ;;
+esac

@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Starts a ship worker (README.md) for each project in
+  ~/.config/shipyard/projects that has a PR waiting in its queue, so a PR a
+  cloud session labeled `ship` lands without a laptop ship. Fires every 15
+  minutes; `bin/shipyard poll` exits quietly when a worker runs or no PR
+  carries the label. Install (and reinstall after a change: bootout, then
+  bootstrap):
+
+    cp launchd/com.billy.shipyard.plist ~/Library/LaunchAgents/
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.billy.shipyard.plist
+
+  launchd starts it with a bare PATH, so the plist names the directories
+  the workers and their projects' gates and rolls call into (asdf shims for
+  mix and node, Homebrew for gh and jq, ~/.local/bin for sprite); add one
+  when a tool moves.
+
+  Remove with `launchctl bootout gui/$(id -u)/com.billy.shipyard`.
+  Log: ~/Library/Logs/shipyard.log; each worker's own log is
+  ~/.cache/shipyard/<project>/logs/worker.log.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.billy.shipyard</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/billy/dev/shipyard/bin/shipyard</string>
+        <string>poll</string>
+    </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/Users/billy/.asdf/shims:/Users/billy/.local/bin:/opt/homebrew/opt/postgresql@17/bin:/Users/billy/Library/Python/3.9/bin:/Users/billy/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+    <key>StartInterval</key>
+    <integer>900</integer>
+    <key>StandardOutPath</key>
+    <string>/Users/billy/Library/Logs/shipyard.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/billy/Library/Logs/shipyard.log</string>
+    <key>ProcessType</key>
+    <string>Background</string>
+    <key>LimitLoadToSessionType</key>
+    <string>Aqua</string>
+</dict>
+</plist>
