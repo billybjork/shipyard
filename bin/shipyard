@@ -63,10 +63,11 @@ start() {
   fi
 
   mkdir -p "$home/logs"
-  local lock=$home/start.lock
-  for _ in $(seq 100); do mkdir "$lock" 2>/dev/null && break || sleep 0.2; done
-  [ -d "$lock" ] || { say "$lock is held; remove it if no start is under way"; exit 1; }
-  trap 'rmdir "$lock"' EXIT
+  # Global, not local: the EXIT trap runs after start() has returned.
+  start_lock=$home/start.lock
+  for _ in $(seq 100); do mkdir "$start_lock" 2>/dev/null && break || sleep 0.2; done
+  [ -d "$start_lock" ] || { say "$start_lock is held; remove it if no start is under way"; exit 1; }
+  trap 'rmdir "$start_lock"' EXIT
 
   if [ -f "$home/worker.pid" ] && kill -0 "$(cat "$home/worker.pid")" 2>/dev/null; then
     [ "$if_queued" = true ] || say "$name: running (pid $(cat "$home/worker.pid")); it takes the PR from the queue"
