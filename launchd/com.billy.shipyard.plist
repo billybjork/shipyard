@@ -40,6 +40,11 @@
     <string>/Users/billy/Library/Logs/shipyard.log</string>
     <key>StandardErrorPath</key>
     <string>/Users/billy/Library/Logs/shipyard.log</string>
+    <!-- `poll` returns once it has started the workers in the background;
+         without this, launchd kills the job's whole process group, the
+         workers with it, the moment `poll` exits. -->
+    <key>AbandonProcessGroup</key>
+    <true/>
     <key>ProcessType</key>
     <string>Background</string>
     <key>LimitLoadToSessionType</key>
