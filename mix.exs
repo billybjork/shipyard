@@ -11,7 +11,7 @@ defmodule Shipyard.MixProject do
       start_permanent: false,
       deps: [],
       aliases: [
-        # The whole gate (bin/check).
+        # The whole gate (`bin/shipyard check`).
         check: [
           "compile --warnings-as-errors --force",
           "format --check-formatted",

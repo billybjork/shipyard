@@ -60,7 +60,8 @@ in the project.
   4. The split gate on that exact commit. No verdict leaves the PR queued.
   5. Force-push the branch with lease.
   6. The `gate` status on the commit, naming the Sprites.
-  7. The merge, per `merge`.
+  7. The merge, per `merge`: `squash` merges with `--match-head-commit`,
+     then checks that the landed tree equals the gated one.
 
   The next entry starts right after the merge.
 - **The roll** (`Shipyard.Roll`) runs beside the next gate, from its own
@@ -77,12 +78,16 @@ in the project.
   `ship: landed, not live.`, or `ship: sent back.` (the reason). The label
   comes off after the comment. A PR that gets no verdict three times in
   one run is sent back.
-- **Billy hears** of every ship's end (`Shipyard.Notify`): one push to
-  ntfy.sh on the topic `NTFY_TOPIC` from the project's `.env`, and a macOS
-  notification, each naming the project, the PR's number and title, the
-  outcome, what rolled, and the branch, never code, logs or the digest.
-  The topic's secrecy is the only access control: it stays in `.env`, out
-  of logs, and the tests never read it. A notification never holds a ship.
+- **Billy hears** of every ship's end (`Shipyard.Notify`): live, red,
+  landed but not live, or sent back, one message each; a retry is not an
+  end and sends nothing. Each is one push to ntfy.sh on the topic
+  `NTFY_TOPIC` from the project's `.env`, and a macOS notification, each
+  naming the project, the PR's number and title, the outcome, what rolled,
+  and the branch, never code, logs or the digest. The topic's secrecy is
+  the only access control: it stays in `.env`, out of logs, and the tests
+  never read it. A notification never holds a ship: without the topic the
+  worker logs a warning at start and sends no push, and a failed push is
+  one warning line.
 - **Reading it.** `bin/shipyard wait <project> <pr>` waits silently until
   the label is off, prints the newest result, and exits 0 only on `live`.
   `bin/shipyard list <project>` shows the queue, the running entry and its
@@ -91,7 +96,10 @@ in the project.
   `logs/ships.tsv` (`Shipyard.Record`): its outcome and seconds, the wait
   from its label to the worker taking it, the gate's wall seconds, tier
   and slowest part, and the cause of a red, a retry, or a ship that landed
-  but is not live. `bin/shipyard list <project> --summary [since]` gives
+  but is not live: a red gate is `static` (a part other than the suite),
+  `timing` (the digest names a timeout) or `test`; others include
+  `sprite`, `sprite-rerun`, `main-moved`, `conflict`, `history`, `roll`
+  and `health`. `bin/shipyard list <project> --summary [since]` gives
   gate time p50 and p90 per tier, the queue wait, and the causes.
 
 ## Where it runs
