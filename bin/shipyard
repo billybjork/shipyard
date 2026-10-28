@@ -8,7 +8,7 @@
 #                                                project in ~/.config/shipyard/projects
 #   bin/shipyard list <project> [--summary [since]]
 #   bin/shipyard wait <project> <pr>             exit 0 only when the ship is live
-#   bin/shipyard watch <project> <pr> [-- cmd]   wait (or cmd) in a Rex tab; prints its block
+#   bin/shipyard watch <project> <pr> [-- cmd]   wait (or cmd) in a Rex pane; prints its block
 #   bin/shipyard check                           this repository's own gate
 #
 # `start` returns at once. The worker runs from its own clone of this
@@ -26,12 +26,12 @@
 # tab named for the project that shows its log and status and stays once it
 # stops; elsewhere (launchd before login, SHIPYARD_REX=0) it runs detached.
 #
-# `watch` is `wait` where an agent or Billy can see it: a tab in the Rex
-# session it runs in ($REX_SESSION, else Shipyard), not in focus. It prints
-# the tab's block; `rex wait -s <session> <block> --for 9m` returns wait's
-# exit status once the ship ends (repeat it on a timeout), and `rex capture`
-# reads the result. The tab stays until it's closed. Without Rex it is
-# `wait`.
+# `watch` is `wait` where an agent or Billy can see it: a pane below the
+# Rex pane it's called from ($REX_BLOCK), not in focus, or a tab in the
+# session Shipyard when it isn't called from one. It prints the pane's
+# block; `rex wait -s <session> <block> --for 9m` returns wait's exit status
+# once the ship ends (repeat it on a timeout), and `rex capture` reads the
+# result. The pane stays until it's closed. Without Rex it is `wait`.
 set -euo pipefail
 
 self=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -173,7 +173,7 @@ worker_tab() {
   die "the worker's Rex tab started but wrote no pid to $home/worker.pid"
 }
 
-# `wait`, or the command after `--`, in a tab: see watch at the top.
+# `wait`, or the command after `--`, in a pane: see watch at the top.
 watch() {
   project "${1:-}"
   local pr=${2:-} session block
@@ -186,10 +186,16 @@ watch() {
     say "no Rex here; waiting in this terminal" >&2
     exec "${cmd[@]}"
   fi
-  read -r session block < <(rex_tab "${REX_SESSION:-}" "ship #$pr" "$top" "${cmd[@]}") && [ -n "$block" ] ||
-    die "opening a Rex tab to wait in failed"
+  if [ -n "${REX_SESSION:-}" ] && [ -n "${REX_BLOCK:-}" ]; then
+    session=$REX_SESSION
+    block=$(rexc split -s "$session" -b "$REX_BLOCK" --split=below --ratio 30 --label "ship #$pr" \
+      -c "$top" --keep-open --focus=false --json -- "${cmd[@]}" | jq -er '.block_ids[0]')
+  else
+    read -r session block < <(rex_tab "" "ship #$pr" "$top" "${cmd[@]}")
+  fi
+  [ -n "$block" ] || die "opening a Rex pane to wait in failed"
   echo "$block"
-  say "#$pr: waiting in Rex tab 'ship #$pr' (block $block). Then: rex wait -s $session $block --for 9m; rex capture -s $session -b $block --trim | tail -n 40" >&2
+  say "#$pr: waiting in Rex pane 'ship #$pr' (block $block). Then: rex wait -s $session $block --for 9m; rex capture -s $session -b $block --trim | tail -n 40; rex block close -s $session $block" >&2
 }
 
 # The worker itself, in this process (the Rex tab's or the detached one):

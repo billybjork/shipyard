@@ -90,11 +90,11 @@ in the project.
   one warning line.
 - **Reading it.** `bin/shipyard wait <project> <pr>` waits silently until
   the label is off, prints the newest result, and exits 0 only on `live`.
-  `bin/shipyard watch <project> <pr>` runs that wait in a Rex tab, out of
-  focus, in the session it's called from (`$REX_SESSION`, else
-  `Shipyard`), and prints the tab's block: `rex wait -s <session> <block>
+  `bin/shipyard watch <project> <pr>` runs that wait in a Rex pane, out
+  of focus, below the pane it's called from (`$REX_BLOCK`; a tab in the
+  session `Shipyard` when there is none), and prints the pane's block: `rex wait -s <session> <block>
   --for 9m` returns the wait's exit status when the ship ends (repeat it
-  on a timeout) and `rex capture` reads the result. A wait in a tab
+  on a timeout) and `rex capture` reads the result. A wait in a pane
   belongs to no agent's command, so no command timeout or harness ends it,
   and Billy can see it. Without Rex, `watch` is `wait`.
 - **Its status.** The worker and `wait` report to the terminal they run in
