@@ -120,12 +120,16 @@ defmodule Shipyard.Entry do
   defp gate(ship, dir, tier, [cmd | args] = command, sha, pr) do
     command = Enum.join(command, " ")
 
-    # The gate may report its parts beneath the PR's status record.
+    # The gate may report its parts beneath the PR's status record, to the
+    # worker's terminal by name: a port's command has no controlling one.
     {out, status} =
       Cmd.run(ship, dir, cmd, args,
         stderr_to_stdout: false,
         timeout: ship.gate_timeout_ms,
-        env: [{"SHIPYARD_STATUS_ID", Status.id(pr)} | ship.env]
+        env: [
+          {"SHIPYARD_STATUS_ID", Status.id(pr)},
+          {"SHIPYARD_STATUS_TTY", ship.status} | ship.env
+        ]
       )
 
     run = gate_run(ship, sha)

@@ -58,7 +58,7 @@ defmodule Shipyard.WorkerTest do
   fi
   sha=$(git rev-parse HEAD)
   echo "gate $1 $sha" >>"$STUB_LOG"
-  echo "$SHIPYARD_STATUS_ID" >>"$HOME/status-ids"
+  echo "$SHIPYARD_STATUS_ID ${SHIPYARD_STATUS_TTY:-none}" >>"$HOME/status-ids"
   mkdir -p "$HOME/gate-logs"
   [ "${GATE_EXIT:-0}" = 1 ] && result=red || result=green
   printf 'at\t%s\t%s\tv\t14\tstatic:9:proj-gate-1:green\ttest-1:12:proj-gate-5:%s:reran-from-proj-gate-2\n' \
@@ -491,7 +491,7 @@ defmodule Shipyard.WorkerTest do
     assert [%{outcome: "red", cause: "history", gate: ""}] = rows(o)
   end
 
-  test "the worker reports to its terminal: each PR's steps and its end, live as done and red as error, the gate told its PR's record, and the worker itself",
+  test "the worker reports to its terminal: each PR's steps and its end, live as done and red as error, the gate told its PR's record and the terminal, and the worker itself",
        %{tmp_dir: tmp} do
     tty = Path.join(tmp, "tty")
     o = setup_origin(tmp, [], status: tty)
@@ -524,6 +524,6 @@ defmodule Shipyard.WorkerTest do
     assert {"working", "gating #12"} in root
     assert {"working", "rolling #12"} in root
     assert {"idle", "stopped: the queue is empty"} == List.last(root)
-    assert File.read!(Path.join(tmp, "status-ids")) == "pr-12\npr-13\n"
+    assert File.read!(Path.join(tmp, "status-ids")) == "pr-12 #{tty}\npr-13 #{tty}\n"
   end
 end

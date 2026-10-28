@@ -104,7 +104,9 @@ in the project.
   working with its step, then `done` when live and `error` for any other
   end, which outlive the worker. The gate runs with `SHIPYARD_STATUS_ID`
   set to its PR's record, so a project's gate can report each part beneath
-  it (`pr-<n>/<part>`) to `/dev/tty`. Reports go only to the terminal,
+  it (`pr-<n>/<part>`) to the worker's terminal, named in
+  `SHIPYARD_STATUS_TTY` (a command the worker runs has no controlling
+  terminal, so `/dev/tty` is not it). Reports go only to the terminal,
   never to stdout or the logs.
   `bin/shipyard list <project>` shows the queue, the running entry and its
   step, the merged PRs waiting for a roll, and the last 20 results.

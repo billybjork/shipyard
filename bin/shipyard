@@ -116,7 +116,7 @@ start() {
     # kills a command's process group when the command ends. macOS has no
     # setsid binary; perl's exec keeps the pid that worker.pid records.
     nohup perl -MPOSIX=setsid -e 'setsid() or die "setsid: $!\n"; exec @ARGV or die "exec: $!\n"' \
-      "$self/bin/shipyard" _worker "$top" >>"$home/logs/worker.log" 2>&1 </dev/null &
+      env -u SHIPYARD_STATUS_TTY "$self/bin/shipyard" _worker "$top" >>"$home/logs/worker.log" 2>&1 </dev/null &
     echo $! >"$home/worker.pid"
     where=detached
   fi
@@ -166,7 +166,7 @@ worker_tab() {
       rexc window close -s "$session" "$old" >/dev/null || true
     done
   fi
-  rex_tab "$session" "$name" "$home" bash -c 'echo $$ >"$1"; exec > >(tee -a "$2") 2>&1; exec "$3" _worker "$4"' \
+  rex_tab "$session" "$name" "$home" bash -c 'echo $$ >"$1"; SHIPYARD_STATUS_TTY=$(tty) && export SHIPYARD_STATUS_TTY; exec > >(tee -a "$2") 2>&1; exec "$3" _worker "$4"' \
     _ "$home/worker.pid" "$home/logs/worker.log" "$self/bin/shipyard" "$top" >/dev/null || return 1
   # The tab writes the pid as it starts; wait for it, so a second start sees it.
   for _ in $(seq 100); do [ -s "$home/worker.pid" ] && return 0 || sleep 0.1; done

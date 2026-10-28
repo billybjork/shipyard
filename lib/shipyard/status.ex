@@ -13,10 +13,14 @@ defmodule Shipyard.Status do
   `error` for any other end. A `done` or `error` record outlives the
   worker, so the tab keeps each ship's end until it is looked at. The
   gate runs with `SHIPYARD_STATUS_ID` set to its PR's record id, so a
-  project's gate can report its parts beneath it (`pr-12/static-1`).
+  project's gate can report its parts beneath it (`pr-12/static-1`) to
+  `SHIPYARD_STATUS_TTY`.
 
-  Reports go to `ship.status`, the controlling terminal (`/dev/tty`) when
-  the worker runs, never to stdout or the log. A worker with no terminal
+  Reports go to `ship.status`, never to stdout or the log: the terminal
+  device the worker's Rex tab names in `SHIPYARD_STATUS_TTY`, else the
+  controlling terminal (`/dev/tty`). The gate gets the same device in
+  `SHIPYARD_STATUS_TTY`, since a command the worker runs has no
+  controlling terminal of its own. A worker with no terminal
   (the detached start) can't open it and reports nothing; the tests set
   no path. `bin/shipyard wait` reports the same way, in the root record of
   the terminal it waits in (`bin/shipyard watch` opens one).
