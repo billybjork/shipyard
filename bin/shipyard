@@ -8,7 +8,7 @@
 #                                                project in ~/.config/shipyard/projects
 #   bin/shipyard list <project> [--summary [since]]
 #   bin/shipyard wait <project> <pr>             exit 0 only when the ship is live
-#   bin/shipyard watch <project> <pr> [-- cmd]   wait (or cmd) in a Rex pane; prints its block
+#   bin/shipyard watch <project> <pr> [-- cmd]   wait (or cmd) in a Rex background terminal; prints its block
 #   bin/shipyard check                           this repository's own gate
 #
 # `start` returns at once. The worker runs from its own clone of this
@@ -28,12 +28,14 @@
 # that fails keeps its tab until Enter. Elsewhere (launchd before login,
 # SHIPYARD_REX=0) it runs detached.
 #
-# `watch` is `wait` where an agent or Billy can see it: a pane below the
-# Rex pane it's called from ($REX_BLOCK), not in focus, or a tab in the
-# session Shipyard when it isn't called from one. It prints the pane's
-# block; `rex wait -s <session> <block> --for 9m` returns wait's exit status
-# once the ship ends (repeat it on a timeout), and `rex capture` reads the
-# result. The pane stays until it's closed. Without Rex it is `wait`.
+# `watch` is `wait` where an agent or Billy can reach it: a background
+# terminal in the Rex session it's called from (a block no tab shows; the
+# palette's "Background: Show" places it), or a tab in the session Shipyard
+# when it isn't called from one. It prints the terminal's block; `rex wait
+# -s <session> <block> --for 9m` returns wait's exit status once the ship
+# ends (on a timeout it exits 1 saying so; repeat it), and `rex capture`
+# reads the result. The terminal stays until it's closed (`rex block
+# close`). Without Rex it is `wait`.
 set -euo pipefail
 
 self=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -189,16 +191,22 @@ watch() {
     say "no Rex here; waiting in this terminal" >&2
     exec "${cmd[@]}"
   fi
-  if [ -n "${REX_SESSION:-}" ] && [ -n "${REX_BLOCK:-}" ]; then
+  if [ -n "${REX_SESSION:-}" ]; then
+    # A background terminal: a block in the caller's session that no tab
+    # shows (Billy brings it into view from the palette, "Background: Show").
+    # The command reaches jq as NUL-separated input, so its flags stay its own.
     session=$REX_SESSION
-    block=$(rexc split -s "$session" -b "$REX_BLOCK" --split=below --ratio 30 --label "ship #$pr" \
-      -c "$top" --keep-open --focus=false --json -- "${cmd[@]}" | jq -er '.block_ids[0]')
+    block=$(printf '%s\0' "${cmd[@]}" | jq -Rs --arg label "ship #$pr" --arg cwd "$top" \
+      '{flavor: "com.superlogical.terminal.shell", label: $label,
+        options: {cwd: $cwd, command: (["/bin/zsh", "-lic", "exec \"$@\"", "zsh"] + (split("\u0000") | .[:-1])),
+                  exit: {on_completion: false}}}' |
+      rexc api call -s "$session" session.new_block - | jq -er .block_id)
   else
     read -r session block < <(rex_tab "" "ship #$pr" "$top" "${cmd[@]}")
   fi
-  [ -n "$block" ] || die "opening a Rex pane to wait in failed"
+  [ -n "$block" ] || die "opening a Rex terminal to wait in failed"
   echo "$block"
-  say "#$pr: waiting in Rex pane 'ship #$pr' (block $block). Then: rex wait -s $session $block --for 9m; rex capture -s $session -b $block --trim | tail -n 40; rex block close -s $session $block" >&2
+  say "#$pr: waiting in background terminal 'ship #$pr' (block $block). Then: rex wait -s $session $block --for 9m; rex capture -s $session -b $block --trim | tail -n 40; rex block close -s $session $block" >&2
 }
 
 # The worker's tab: the worker, its pid in worker.pid and its output in the
