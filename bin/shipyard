@@ -17,8 +17,8 @@
 # under the project's merged config. It gates each entry in a linked
 # worktree of the project clone, .../entry, and rolls from a second clone,
 # .../roll, which its first roll makes. None is a worktree of a working
-# checkout. It loads the primary checkout's .env (the roll's settings and
-# NTFY_TOPIC), runs in its own session (so it outlives the command that
+# checkout. It runs with the project's deploy secrets (the roll's settings
+# and NTFY_TOPIC, from fnox's deploy tier; run_worker), runs in its own session (so it outlives the command that
 # started it), holds `caffeinate -i` where there is one, logs to
 # .../logs/worker.log, and exits once the queue is empty and no roll runs or
 # waits. `--if-queued` starts it only when a PR carries the `ship` label.
@@ -227,24 +227,29 @@ worker_in_tab() {
 }
 
 # The worker itself, in this process (the Rex tab's or the detached one):
-# the primary checkout's .env, then `mix run` in the worker's own clone,
-# under caffeinate where there is one.
+# `mix run` in the worker's own clone, under caffeinate where there is one,
+# with the project's deploy secrets (the roll's settings and NTFY_TOPIC).
+# Those come from fnox's deploy tier, named by the fnox.toml in the worker's
+# clone of the project (~/dev/rig, "Secrets"); without fnox, bws, or that file, from
+# the primary checkout's .env, read as KEY=value lines, never run.
 run_worker() {
   project "$1"
   local primary
   primary=$(cd "$(git -C "$top" rev-parse --path-format=absolute --git-common-dir)/.." && pwd)
   cd "$home/app"
-  if [ -f "$primary/.env" ]; then
-    set -a
-    # shellcheck disable=SC1091
-    . "$primary/.env"
-    set +a
+  secrets=()
+  if command -v fnox >/dev/null && command -v bws >/dev/null && [ -f "$home/repo/fnox.toml" ]; then
+    secrets=(fnox -c "$home/repo/fnox.toml" -P deploy exec --no-defaults --)
+  elif [ -f "$primary/.env" ]; then
+    while IFS= read -r line || [ -n "$line" ]; do
+      [[ $line =~ ^([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]] && export "${BASH_REMATCH[1]}=${BASH_REMATCH[2]}"
+    done <"$primary/.env"
   fi
   unset MIX_ENV
   export SHIPYARD_CONFIG=$home/repo/.shipyard.json SHIPYARD_HOME=$home
   keep=()
   command -v caffeinate >/dev/null && keep=(caffeinate -i)
-  exec ${keep[@]+"${keep[@]}"} mix run --no-halt
+  exec ${secrets[@]+"${secrets[@]}"} ${keep[@]+"${keep[@]}"} mix run --no-halt
 }
 
 case "${1:-}" in

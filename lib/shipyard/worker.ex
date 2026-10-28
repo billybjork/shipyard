@@ -42,7 +42,7 @@ defmodule Shipyard.Worker do
     unless ship.ntfy_topic,
       do:
         Logger.warning(
-          "ship: NTFY_TOPIC is not set in the project's .env; ships end with no push"
+          "ship: NTFY_TOPIC is not in the project's deploy secrets; ships end with no push"
         )
 
     send(self(), :poll)

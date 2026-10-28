@@ -81,10 +81,10 @@ in the project.
 - **Billy hears** of every ship's end (`Shipyard.Notify`): live, red,
   landed but not live, or sent back, one message each; a retry is not an
   end and sends nothing. Each is one push to ntfy.sh on the topic
-  `NTFY_TOPIC` from the project's `.env`, and a macOS notification, each
+  `NTFY_TOPIC` from the project's deploy secrets, and a macOS notification, each
   naming the project, the PR's number and title, the outcome, what rolled,
   and the branch, never code, logs or the digest. The topic's secrecy is
-  the only access control: it stays in `.env`, out of logs, and the tests
+  the only access control: it stays in Bitwarden, out of logs, and the tests
   never read it. A notification never holds a ship: without the topic the
   worker logs a warning at start and sends no push, and a failed push is
   one warning line.
@@ -129,9 +129,13 @@ start, so a worker runs merged code under the project's merged config;
 `entry`, a linked worktree of `repo` it gates in; `roll`, a second clone
 it rolls from (a fetch into refs the gating checkout shares would race
 the entry's own); `state.json`; and `logs/` (`worker.log`, `ships.tsv`,
-each roll's log). It loads the primary checkout's `.env`, runs `mix run`
-under `caffeinate -i`, and stops once the queue has been empty, with no
-roll running or waiting, for a minute. The next ship starts it on fresh
+each roll's log). It runs `mix run` under `caffeinate -i` with the
+project's deploy secrets: fnox's deploy tier (`fnox -P deploy`, read with
+the ship worker's own Bitwarden token) for the names in the `fnox.toml` of
+its clone of the project, or, without fnox or that file, the primary
+checkout's `.env` read as `KEY=value` lines (`~/dev/rig`, "Secrets"). It
+stops once the queue has been empty, with no roll running or waiting, for
+a minute. The next ship starts it on fresh
 code.
 
 Where a Rex server runs, the worker runs in a Rex tab: the session
