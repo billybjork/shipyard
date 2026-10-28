@@ -23,8 +23,10 @@
 # .../logs/worker.log, and exits once the queue is empty and no roll runs or
 # waits. `--if-queued` starts it only when a PR carries the `ship` label.
 # Where a Rex server runs, the worker runs in the Rex session Shipyard, in a
-# tab named for the project that shows its log and status and stays once it
-# stops; elsewhere (launchd before login, SHIPYARD_REX=0) it runs detached.
+# tab named for the project that shows its log and status. The tab closes
+# when the worker ends cleanly, and the session with its last tab; a worker
+# that fails keeps its tab until Enter. Elsewhere (launchd before login,
+# SHIPYARD_REX=0) it runs detached.
 #
 # `watch` is `wait` where an agent or Billy can see it: a pane below the
 # Rex pane it's called from ($REX_BLOCK), not in focus, or a tab in the
@@ -136,17 +138,19 @@ rex_here() { command -v rex >/dev/null && rexc whoami >/dev/null 2>&1; }
 # Opens a tab labeled $2 at $3 running the rest, not in focus, in session
 # $1 (an id), or in the session labeled $rex_session when $1 is empty,
 # which it creates when there is none. Prints the session's id and the
-# tab's block. The tab stays open once its command ends.
+# tab's block. The tab stays open once its command ends unless $keep is
+# empty.
 rex_tab() {
   local session=$1 label=$2 dir=$3 out
   shift 3
+  local open=(${keep---keep-open})
   [ -n "$session" ] ||
     session=$(rexc ls --json | jq -r --arg l "$rex_session" '[.sessions[] | select(.label == $l)][0].session_id // empty')
   if [ -n "$session" ]; then
-    out=$(rexc window new -s "$session" "$label" -c "$dir" --keep-open --focus=false --json -- "$@") &&
+    out=$(rexc window new -s "$session" "$label" -c "$dir" ${open[@]+"${open[@]}"} --focus=false --json -- "$@") &&
       echo "$session $(jq -er '.block_ids[0]' <<<"$out")"
   else
-    out=$(rexc new "$rex_session" --window "$label" -c "$dir" --keep-open --json -- "$@") &&
+    out=$(rexc new "$rex_session" --window "$label" -c "$dir" ${open[@]+"${open[@]}"} --json -- "$@") &&
       jq -er '"\(.session_id) \(.initial_windows[0].block_ids[0])"' <<<"$out"
   fi
 }
@@ -155,7 +159,7 @@ rex_tab() {
 # session $rex_session, replacing the last worker's tab, when a Rex server
 # runs here and SHIPYARD_REX is not 0. A Rex terminal outlives whatever
 # started it, as the detached worker does, and the tab shows the worker's
-# log and status (lib/shipyard/status.ex) and keeps them once it stops.
+# log and status (lib/shipyard/status.ex) while it runs (worker_in_tab).
 # Fails, starting nothing, when there's no Rex to start it in.
 worker_tab() {
   [ "${SHIPYARD_REX:-1}" != 0 ] && rex_here || return 1
@@ -166,8 +170,7 @@ worker_tab() {
       rexc window close -s "$session" "$old" >/dev/null || true
     done
   fi
-  rex_tab "$session" "$name" "$home" bash -c 'echo $$ >"$1"; SHIPYARD_STATUS_TTY=$(tty) && export SHIPYARD_STATUS_TTY; exec > >(tee -a "$2") 2>&1; exec "$3" _worker "$4"' \
-    _ "$home/worker.pid" "$home/logs/worker.log" "$self/bin/shipyard" "$top" >/dev/null || return 1
+  keep='' rex_tab "$session" "$name" "$home" "$self/bin/shipyard" _worker_tab "$top" >/dev/null || return 1
   # The tab writes the pid as it starts; wait for it, so a second start sees it.
   for _ in $(seq 100); do [ -s "$home/worker.pid" ] && return 0 || sleep 0.1; done
   die "the worker's Rex tab started but wrote no pid to $home/worker.pid"
@@ -196,6 +199,31 @@ watch() {
   [ -n "$block" ] || die "opening a Rex pane to wait in failed"
   echo "$block"
   say "#$pr: waiting in Rex pane 'ship #$pr' (block $block). Then: rex wait -s $session $block --for 9m; rex capture -s $session -b $block --trim | tail -n 40; rex block close -s $session $block" >&2
+}
+
+# The worker's tab: the worker, its pid in worker.pid and its output in the
+# tab and worker.log. A clean end closes the tab (it has no keep-open), and
+# the session too when this was its last tab, so no stray tab stays; a
+# failure stays on screen until Enter.
+worker_in_tab() {
+  project "$1"
+  local pid status
+  SHIPYARD_STATUS_TTY=$(tty) && export SHIPYARD_STATUS_TTY
+  exec > >(tee -a "$home/logs/worker.log") 2>&1
+  "$self/bin/shipyard" _worker "$top" &
+  pid=$!
+  echo "$pid" >"$home/worker.pid"
+  status=0
+  wait "$pid" || status=$?
+  if [ "$status" = 0 ]; then
+    [ -n "${REX_SESSION:-}" ] &&
+      [ "$(rexc window ls -s "$REX_SESSION" --json | jq '.windows | length')" = 1 ] &&
+      rexc session kill "$REX_SESSION" >/dev/null 2>&1
+    exit 0
+  fi
+  say "the worker exited $status; log: $home/logs/worker.log. Enter closes this tab."
+  read -r _ || true
+  exit "$status"
 }
 
 # The worker itself, in this process (the Rex tab's or the detached one):
@@ -251,6 +279,9 @@ case "${1:-}" in
     ;;
   _worker)
     run_worker "${2:-}"
+    ;;
+  _worker_tab)
+    worker_in_tab "${2:-}"
     ;;
   *) usage ;;
 esac

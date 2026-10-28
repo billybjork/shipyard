@@ -136,8 +136,10 @@ code.
 
 Where a Rex server runs, the worker runs in a Rex tab: the session
 `Shipyard`, a tab named for the project, out of focus, showing its log
-and status, which stays once the worker stops and is replaced by the
-next start's. A Rex terminal outlives whatever started it, which an
+and status. The tab closes when the worker ends cleanly, and the
+session with it when no other worker's tab is left, so a finished worker
+leaves no tab behind; a worker that fails keeps its tab, with the exit
+status, until Enter. A Rex terminal outlives whatever started it, which an
 agent's command does not (a harness kills its process group when the
 command ends). Without Rex (launchd's poll before login, or
 `SHIPYARD_REX=0`) the worker runs detached in its own session instead.
