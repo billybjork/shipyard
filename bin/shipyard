@@ -260,41 +260,48 @@ run_worker() {
   exec ${secrets[@]+"${secrets[@]}"} ${keep[@]+"${keep[@]}"} mix run --no-halt
 }
 
-case "${1:-}" in
-  start)
-    shift
-    start "$@"
-    ;;
-  poll)
-    list=$HOME/.config/shipyard/projects
-    [ -f "$list" ] || exit 0
-    while IFS= read -r dir; do
-      case "$dir" in "" | \#*) continue ;; esac
-      "${BASH_SOURCE[0]}" start "${dir/#\~/$HOME}" --if-queued || say "starting $dir failed"
-    done <"$list"
-    ;;
-  list)
-    project "${2:-}"
-    shift 2
-    SHIPYARD_CONFIG=$config mix_in "$self" shipyard.list "$@"
-    ;;
-  wait)
-    project "${2:-}"
-    [ -n "${3:-}" ] || usage
-    SHIPYARD_CONFIG=$config mix_in "$self" shipyard.wait "$3"
-    ;;
-  check)
-    mix_in "$self" check
-    ;;
-  watch)
-    shift
-    watch "$@"
-    ;;
-  _worker)
-    run_worker "${2:-}"
-    ;;
-  _worker_tab)
-    worker_in_tab "${2:-}"
-    ;;
-  *) usage ;;
-esac
+# The commands. Bash reads a script as it runs it, so all of it is inside
+# main, called on the last line: a long wait or worker keeps running the
+# script it started with when this file changes under it.
+main() {
+  case "${1:-}" in
+    start)
+      shift
+      start "$@"
+      ;;
+    poll)
+      list=$HOME/.config/shipyard/projects
+      [ -f "$list" ] || exit 0
+      while IFS= read -r dir; do
+        case "$dir" in "" | \#*) continue ;; esac
+        "${BASH_SOURCE[0]}" start "${dir/#\~/$HOME}" --if-queued || say "starting $dir failed"
+      done <"$list"
+      ;;
+    list)
+      project "${2:-}"
+      shift 2
+      SHIPYARD_CONFIG=$config mix_in "$self" shipyard.list "$@"
+      ;;
+    wait)
+      project "${2:-}"
+      [ -n "${3:-}" ] || usage
+      SHIPYARD_CONFIG=$config mix_in "$self" shipyard.wait "$3"
+      ;;
+    check)
+      mix_in "$self" check
+      ;;
+    watch)
+      shift
+      watch "$@"
+      ;;
+    _worker)
+      run_worker "${2:-}"
+      ;;
+    _worker_tab)
+      worker_in_tab "${2:-}"
+      ;;
+    *) usage ;;
+  esac
+}
+
+main "$@"; exit
