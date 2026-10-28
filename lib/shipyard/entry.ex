@@ -21,7 +21,7 @@ defmodule Shipyard.Entry do
   gate ran.
   """
 
-  alias Shipyard.{Cmd, GitHub}
+  alias Shipyard.{Cmd, GitHub, Status}
 
   def run(ship, pr, report \\ fn _step -> :ok end) do
     dir = ship.checkout
@@ -33,7 +33,7 @@ defmodule Shipyard.Entry do
          :ok <- history(ship, dir) do
       {tier, command} = tier(ship, dir)
       _ = report.("gate: #{Enum.join(command, " ")} on #{short(sha)}")
-      {verdict, gate} = gate(ship, dir, tier, command, sha)
+      {verdict, gate} = gate(ship, dir, tier, command, sha, pr)
 
       result =
         with {:ok, passed} <- verdict,
@@ -117,13 +117,15 @@ defmodule Shipyard.Entry do
     {tier, ship.gate ++ [tier]}
   end
 
-  defp gate(ship, dir, tier, [cmd | args] = command, sha) do
+  defp gate(ship, dir, tier, [cmd | args] = command, sha, pr) do
     command = Enum.join(command, " ")
 
+    # The gate may report its parts beneath the PR's status record.
     {out, status} =
       Cmd.run(ship, dir, cmd, args,
         stderr_to_stdout: false,
-        timeout: ship.gate_timeout_ms
+        timeout: ship.gate_timeout_ms,
+        env: [{"SHIPYARD_STATUS_ID", Status.id(pr)} | ship.env]
       )
 
     run = gate_run(ship, sha)

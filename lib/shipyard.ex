@@ -17,7 +17,8 @@ defmodule Shipyard do
   project's `.shipyard.json` (`SHIPYARD_CONFIG` names the file) and the
   environment; the tests build their own. `ntfy_topic` comes from the app's
   config, which only `config/runtime.exs` outside the test environment
-  fills (`Shipyard.Notify`).
+  fills (`Shipyard.Notify`), and `status`, the terminal the worker reports
+  to (`Shipyard.Status`), is the app's config too: none in the tests.
 
   The project's file names what differs between projects:
 
@@ -53,6 +54,7 @@ defmodule Shipyard do
     :gate_log,
     :tier,
     :roll_command,
+    :status,
     history: [],
     merge: "squash",
     ntfy_url: "https://ntfy.sh",
@@ -87,6 +89,7 @@ defmodule Shipyard do
         checkout: Path.join(home, "entry"),
         roll: Path.join(home, "roll"),
         ntfy_topic: Application.get_env(:shipyard, :ntfy_topic),
+        status: Application.get_env(:shipyard, :status),
         desktop: :os.type() == {:unix, :darwin}
       },
       Keyword.merge(Map.to_list(project), overrides)

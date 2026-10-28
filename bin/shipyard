@@ -8,6 +8,7 @@
 #                                                project in ~/.config/shipyard/projects
 #   bin/shipyard list <project> [--summary [since]]
 #   bin/shipyard wait <project> <pr>             exit 0 only when the ship is live
+#   bin/shipyard watch <project> <pr> [-- cmd]   wait (or cmd) in a Rex tab; prints its block
 #   bin/shipyard check                           this repository's own gate
 #
 # `start` returns at once. The worker runs from its own clone of this
@@ -21,12 +22,22 @@
 # started it), holds `caffeinate -i` where there is one, logs to
 # .../logs/worker.log, and exits once the queue is empty and no roll runs or
 # waits. `--if-queued` starts it only when a PR carries the `ship` label.
+# Where a Rex server runs, the worker runs in the Rex session Shipyard, in a
+# tab named for the project that shows its log and status and stays once it
+# stops; elsewhere (launchd before login, SHIPYARD_REX=0) it runs detached.
+#
+# `watch` is `wait` where an agent or Billy can see it: a tab in the Rex
+# session it runs in ($REX_SESSION, else Shipyard), not in focus. It prints
+# the tab's block; `rex wait -s <session> <block> --for 9m` returns wait's
+# exit status once the ship ends (repeat it on a timeout), and `rex capture`
+# reads the result. The tab stays until it's closed. Without Rex it is
+# `wait`.
 set -euo pipefail
 
 self=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 say() { echo "shipyard: $*"; }
 die() { echo "shipyard: $*" >&2; exit 64; }
-usage() { sed -n '5,10p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 64; }
+usage() { sed -n '5,11p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 64; }
 
 # The project checkout's toplevel and its config's fields.
 project() {
@@ -82,10 +93,9 @@ start() {
   fi
 
   local repo=$home/repo entry=$home/entry app=$home/app
-  local origin self_origin primary
+  local origin self_origin
   origin=$(git -C "$top" remote get-url origin)
   self_origin=$(git -C "$self" remote get-url origin)
-  primary=$(cd "$(git -C "$top" rev-parse --path-format=absolute --git-common-dir)/.." && pwd)
 
   [ -d "$repo/.git" ] || git clone -q "$origin" "$repo"
   git -C "$repo" fetch -q origin
@@ -98,26 +108,109 @@ start() {
   git -C "$app" checkout -q --force --detach origin/main
   mix_in "$app" compile >>"$home/logs/worker.log" 2>&1 || die "the worker does not compile; see $home/logs/worker.log"
 
-  (
-    cd "$app"
-    if [ -f "$primary/.env" ]; then
-      set -a
-      # shellcheck disable=SC1091
-      . "$primary/.env"
-      set +a
-    fi
-    unset MIX_ENV
-    export SHIPYARD_CONFIG=$repo/.shipyard.json SHIPYARD_HOME=$home
-    keep=()
-    command -v caffeinate >/dev/null && keep=(caffeinate -i)
+  rm -f "$home/worker.pid"
+  if worker_tab; then
+    where="in Rex (session $rex_session, tab $name)"
+  else
     # Its own session, so it outlives whatever started it: an agent harness
     # kills a command's process group when the command ends. macOS has no
     # setsid binary; perl's exec keeps the pid that worker.pid records.
     nohup perl -MPOSIX=setsid -e 'setsid() or die "setsid: $!\n"; exec @ARGV or die "exec: $!\n"' \
-      ${keep[@]+"${keep[@]}"} mix run --no-halt >>"$home/logs/worker.log" 2>&1 </dev/null &
+      "$self/bin/shipyard" _worker "$top" >>"$home/logs/worker.log" 2>&1 </dev/null &
     echo $! >"$home/worker.pid"
-  )
-  say "$name: started (pid $(cat "$home/worker.pid")) at $(git -C "$repo" rev-parse --short HEAD), worker $(git -C "$app" rev-parse --short HEAD); log: $home/logs/worker.log"
+    where=detached
+  fi
+  say "$name: started $where (pid $(cat "$home/worker.pid")) at $(git -C "$repo" rev-parse --short HEAD), worker $(git -C "$app" rev-parse --short HEAD); log: $home/logs/worker.log"
+}
+
+# The Rex session the workers' tabs are in.
+rex_session=Shipyard
+
+# rex without starting a server: a machine with no Rex running (launchd's
+# poll before login) runs the worker detached.
+rexc() { rex --autostart=false "$@"; }
+
+# Whether a Rex server runs here to open tabs in.
+rex_here() { command -v rex >/dev/null && rexc whoami >/dev/null 2>&1; }
+
+# Opens a tab labeled $2 at $3 running the rest, not in focus, in session
+# $1 (an id), or in the session labeled $rex_session when $1 is empty,
+# which it creates when there is none. Prints the session's id and the
+# tab's block. The tab stays open once its command ends.
+rex_tab() {
+  local session=$1 label=$2 dir=$3 out
+  shift 3
+  [ -n "$session" ] ||
+    session=$(rexc ls --json | jq -r --arg l "$rex_session" '[.sessions[] | select(.label == $l)][0].session_id // empty')
+  if [ -n "$session" ]; then
+    out=$(rexc window new -s "$session" "$label" -c "$dir" --keep-open --focus=false --json -- "$@") &&
+      echo "$session $(jq -er '.block_ids[0]' <<<"$out")"
+  else
+    out=$(rexc new "$rex_session" --window "$label" -c "$dir" --keep-open --json -- "$@") &&
+      jq -er '"\(.session_id) \(.initial_windows[0].block_ids[0])"' <<<"$out"
+  fi
+}
+
+# Starts the worker in the tab labeled with the project's name in the Rex
+# session $rex_session, replacing the last worker's tab, when a Rex server
+# runs here and SHIPYARD_REX is not 0. A Rex terminal outlives whatever
+# started it, as the detached worker does, and the tab shows the worker's
+# log and status (lib/shipyard/status.ex) and keeps them once it stops.
+# Fails, starting nothing, when there's no Rex to start it in.
+worker_tab() {
+  [ "${SHIPYARD_REX:-1}" != 0 ] && rex_here || return 1
+  local session old
+  session=$(rexc ls --json | jq -r --arg l "$rex_session" '[.sessions[] | select(.label == $l)][0].session_id // empty')
+  if [ -n "$session" ]; then
+    for old in $(rexc window ls -s "$session" --json | jq -r --arg l "$name" '.windows[] | select(.label == $l) | .window_id'); do
+      rexc window close -s "$session" "$old" >/dev/null || true
+    done
+  fi
+  rex_tab "$session" "$name" "$home" bash -c 'echo $$ >"$1"; exec > >(tee -a "$2") 2>&1; exec "$3" _worker "$4"' \
+    _ "$home/worker.pid" "$home/logs/worker.log" "$self/bin/shipyard" "$top" >/dev/null || return 1
+  # The tab writes the pid as it starts; wait for it, so a second start sees it.
+  for _ in $(seq 100); do [ -s "$home/worker.pid" ] && return 0 || sleep 0.1; done
+  die "the worker's Rex tab started but wrote no pid to $home/worker.pid"
+}
+
+# `wait`, or the command after `--`, in a tab: see watch at the top.
+watch() {
+  project "${1:-}"
+  local pr=${2:-} session block
+  [ -n "$pr" ] || usage
+  shift 2
+  [ "${1:-}" != -- ] || shift
+  local cmd=("$@")
+  [ ${#cmd[@]} -gt 0 ] || cmd=("$self/bin/shipyard" wait "$top" "$pr")
+  if ! rex_here; then
+    say "no Rex here; waiting in this terminal" >&2
+    exec "${cmd[@]}"
+  fi
+  read -r session block < <(rex_tab "${REX_SESSION:-}" "ship #$pr" "$top" "${cmd[@]}") && [ -n "$block" ] ||
+    die "opening a Rex tab to wait in failed"
+  echo "$block"
+  say "#$pr: waiting in Rex tab 'ship #$pr' (block $block). Then: rex wait -s $session $block --for 9m; rex capture -s $session -b $block --trim | tail -n 40" >&2
+}
+
+# The worker itself, in this process (the Rex tab's or the detached one):
+# the primary checkout's .env, then `mix run` in the worker's own clone,
+# under caffeinate where there is one.
+run_worker() {
+  project "$1"
+  local primary
+  primary=$(cd "$(git -C "$top" rev-parse --path-format=absolute --git-common-dir)/.." && pwd)
+  cd "$home/app"
+  if [ -f "$primary/.env" ]; then
+    set -a
+    # shellcheck disable=SC1091
+    . "$primary/.env"
+    set +a
+  fi
+  unset MIX_ENV
+  export SHIPYARD_CONFIG=$home/repo/.shipyard.json SHIPYARD_HOME=$home
+  keep=()
+  command -v caffeinate >/dev/null && keep=(caffeinate -i)
+  exec ${keep[@]+"${keep[@]}"} mix run --no-halt
 }
 
 case "${1:-}" in
@@ -145,6 +238,13 @@ case "${1:-}" in
     ;;
   check)
     mix_in "$self" check
+    ;;
+  watch)
+    shift
+    watch "$@"
+    ;;
+  _worker)
+    run_worker "${2:-}"
     ;;
   *) usage ;;
 esac

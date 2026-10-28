@@ -90,6 +90,22 @@ in the project.
   one warning line.
 - **Reading it.** `bin/shipyard wait <project> <pr>` waits silently until
   the label is off, prints the newest result, and exits 0 only on `live`.
+  `bin/shipyard watch <project> <pr>` runs that wait in a Rex tab, out of
+  focus, in the session it's called from (`$REX_SESSION`, else
+  `Shipyard`), and prints the tab's block: `rex wait -s <session> <block>
+  --for 9m` returns the wait's exit status when the ship ends (repeat it
+  on a timeout) and `rex capture` reads the result. A wait in a tab
+  belongs to no agent's command, so no command timeout or harness ends it,
+  and Billy can see it. Without Rex, `watch` is `wait`.
+- **Its status.** The worker and `wait` report to the terminal they run in
+  with Program Status reports (OSC 7501, `Shipyard.Status`), which Rex
+  shows as a spinner on the tab and marks on the session: the worker's own
+  record says what it gates and rolls; each PR has a record, `pr-<n>`,
+  working with its step, then `done` when live and `error` for any other
+  end, which outlive the worker. The gate runs with `SHIPYARD_STATUS_ID`
+  set to its PR's record, so a project's gate can report each part beneath
+  it (`pr-<n>/<part>`) to `/dev/tty`. Reports go only to the terminal,
+  never to stdout or the logs.
   `bin/shipyard list <project>` shows the queue, the running entry and its
   step, the merged PRs waiting for a roll, and the last 20 results.
 - **The numbers.** Each entry run, a retry included, is a row in
@@ -112,10 +128,17 @@ start, so a worker runs merged code under the project's merged config;
 it rolls from (a fetch into refs the gating checkout shares would race
 the entry's own); `state.json`; and `logs/` (`worker.log`, `ships.tsv`,
 each roll's log). It loads the primary checkout's `.env`, runs `mix run`
-under `caffeinate -i` in its own session (an agent harness kills a
-command's process group when the command ends), and stops once the queue
-has been empty, with no roll running or waiting, for a minute. The next
-ship starts it on fresh code.
+under `caffeinate -i`, and stops once the queue has been empty, with no
+roll running or waiting, for a minute. The next ship starts it on fresh
+code.
+
+Where a Rex server runs, the worker runs in a Rex tab: the session
+`Shipyard`, a tab named for the project, out of focus, showing its log
+and status, which stays once the worker stops and is replaced by the
+next start's. A Rex terminal outlives whatever started it, which an
+agent's command does not (a harness kills its process group when the
+command ends). Without Rex (launchd's poll before login, or
+`SHIPYARD_REX=0`) the worker runs detached in its own session instead.
 
 The launchd job `launchd/com.billy.shipyard.plist` runs `bin/shipyard
 poll` every 15 minutes, which starts a worker for each project listed in

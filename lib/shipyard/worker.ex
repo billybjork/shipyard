@@ -22,12 +22,13 @@ defmodule Shipyard.Worker do
 
   Every entry run, a retry included, leaves a row (`Shipyard.Record`): how
   long its PR waited for the worker, what the gate took, and why it did
-  not land live.
+  not land live. What it is doing, and how each ship ended, it also
+  reports to its terminal (`Shipyard.Status`).
   """
 
   use GenServer, restart: :transient
   require Logger
-  alias Shipyard.{GitHub, Notify, Record, Roll}
+  alias Shipyard.{GitHub, Notify, Record, Roll, Status}
 
   @outcomes %{live: "live", not_live: "landed, not live", red: "red", back: "sent back"}
 
@@ -59,16 +60,19 @@ defmodule Shipyard.Worker do
        # PR number => the runs since its label went on that ended in a retry
        tries: %{},
        idle_since: now(),
-       timer: nil
+       timer: nil,
+       # what the worker's status record last said, so it reports changes only
+       said: nil
      }}
   end
 
   @impl true
   def handle_info(:poll, s) do
-    s = s |> take() |> roll()
+    s = s |> take() |> roll() |> say()
 
     if idle?(s) and now() - s.idle_since >= s.ship.idle_ms do
       Logger.info("ship: the queue is empty and nothing waits for a roll; stopping")
+      Status.root(s.ship, :idle, "stopped: the queue is empty")
       {:stop, :normal, s}
     else
       if s.timer, do: Process.cancel_timer(s.timer)
@@ -177,13 +181,17 @@ defmodule Shipyard.Worker do
 
   defp start(s, pr) do
     Logger.info("ship: ##{pr.number} #{pr.title} (#{pr.branch})")
-    Record.running(s.ship, pr, "start")
     ship = s.ship
 
+    step = fn step ->
+      Record.running(ship, pr, step)
+      Status.pr(ship, pr, :working, step)
+    end
+
+    step.("start")
+
     task =
-      Task.Supervisor.async_nolink(Shipyard.Tasks, fn ->
-        Shipyard.Entry.run(ship, pr, &Record.running(ship, pr, &1))
-      end)
+      Task.Supervisor.async_nolink(Shipyard.Tasks, fn -> Shipyard.Entry.run(ship, pr, step) end)
 
     # The wait is the label's: a retry's run waited on the run before it.
     wait = if Map.has_key?(s.tries, pr.number), do: nil, else: waited(pr.queued_at)
@@ -200,6 +208,7 @@ defmodule Shipyard.Worker do
           Logger.info("ship: ##{pr.number} merged as #{short(merged)}; it waits for a roll")
           cause = if run.gate[:reran], do: "sprite-rerun"
           landed = %{pr: pr, merged: merged, text: text, run: %{run | cause: cause}}
+          Status.pr(s.ship, pr, :working, "merged as #{short(merged)}; waiting for a roll")
           {Map.put(s.landed, pr.number, landed), Map.delete(tries, pr.number)}
 
         {:retry, why, cause} when n >= s.ship.tries ->
@@ -212,6 +221,7 @@ defmodule Shipyard.Worker do
 
         {:retry, why, cause} ->
           Logger.warning("ship: ##{pr.number} stays queued: #{why}")
+          Status.pr(s.ship, pr, :working, "queued again (try #{n} of #{s.ship.tries}): #{why}")
           Record.result(s.ship, pr, :retry, row(%{run | cause: cause}))
           {s.landed, tries}
 
@@ -255,6 +265,31 @@ defmodule Shipyard.Worker do
     end
 
     Notify.ended(s.ship, pr, outcome, @outcomes[outcome], rolled)
+    words = if rolled, do: "#{@outcomes[outcome]}. #{rolled}", else: "#{@outcomes[outcome]}."
+    Status.pr(s.ship, pr, if(outcome == :live, do: :done, else: :error), words)
+  end
+
+  # The worker's status record, when what it would say has changed: the
+  # entry it gates and the PRs a roll is rolling or waits to roll.
+  defp say(s) do
+    doing =
+      Enum.reject(
+        [
+          with({_, pr, _} <- s.running, do: "gating ##{pr.number}"),
+          with({_, waiting} <- s.rolling, do: "rolling #{numbers(waiting)}"),
+          case Map.keys(s.landed) -- ((s.rolling && elem(s.rolling, 1)) || []) do
+            [] -> nil
+            waiting -> "#{numbers(waiting)} waiting for a roll"
+          end
+        ],
+        &is_nil/1
+      )
+
+    said =
+      if doing == [], do: {:idle, "the queue is empty"}, else: {:working, Enum.join(doing, "; ")}
+
+    if said != s.said, do: Status.root(s.ship, elem(said, 0), elem(said, 1))
+    %{s | said: said}
   end
 
   defp run(wait), do: %{t0: now(), wait: wait, gate: %{}, cause: nil}

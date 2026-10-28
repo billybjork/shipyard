@@ -58,6 +58,7 @@ defmodule Shipyard.WorkerTest do
   fi
   sha=$(git rev-parse HEAD)
   echo "gate $1 $sha" >>"$STUB_LOG"
+  echo "$SHIPYARD_STATUS_ID" >>"$HOME/status-ids"
   mkdir -p "$HOME/gate-logs"
   [ "${GATE_EXIT:-0}" = 1 ] && result=red || result=green
   printf 'at\t%s\t%s\tv\t14\tstatic:9:proj-gate-1:green\ttest-1:12:proj-gate-5:%s:reran-from-proj-gate-2\n' \
@@ -213,8 +214,8 @@ defmodule Shipyard.WorkerTest do
     )
   end
 
-  defp drain!(o) do
-    pid = start_supervised!({Shipyard.Worker, ship: o.ship})
+  defp drain!(o, id \\ Shipyard.Worker) do
+    pid = start_supervised!({Shipyard.Worker, ship: o.ship}, id: id)
     ref = Process.monitor(pid)
     assert_receive {:DOWN, ^ref, :process, ^pid, :normal}, 60_000
   end
@@ -488,5 +489,41 @@ defmodule Shipyard.WorkerTest do
     assert comments(o, 7) =~ "ship: red. The history rule `bash scripts/history.sh` failed"
     assert origin(o, "claude/history") == head
     assert [%{outcome: "red", cause: "history", gate: ""}] = rows(o)
+  end
+
+  test "the worker reports to its terminal: each PR's steps and its end, live as done and red as error, the gate told its PR's record, and the worker itself",
+       %{tmp_dir: tmp} do
+    tty = Path.join(tmp, "tty")
+    o = setup_origin(tmp, [], status: tty)
+    queue!(o, 12, "claude/first", "lib/first.ex", "2026-10-09T10:00:00Z")
+
+    drain!(o)
+
+    o = %{o | ship: %{o.ship | env: [{"GATE_EXIT", "1"} | o.ship.env]}}
+    queue!(o, 13, "claude/red", "lib/red.ex", "2026-10-09T10:01:00Z")
+
+    drain!(o, :again)
+
+    reports = Shipyard.StatusTest.reports(tty)
+    pr = fn id -> for %{"id" => ^id} = r <- reports, do: {r["state"], r["msg"]} end
+
+    assert [
+             {"working", "start"},
+             {"working", "rebase"},
+             {"working", "gate: " <> _},
+             {"working", "merge"},
+             {"working", "merged as " <> _},
+             {"done", "live. Rolled web at " <> _}
+           ] = pr.("pr-12")
+
+    assert [{"working", "start"} | _] = pr.("pr-13")
+    assert {"error", "red."} = List.last(pr.("pr-13"))
+    assert hd(for %{"id" => "pr-12"} = r <- reports, do: r["title"]) == "#12 change claude/first"
+
+    root = for r <- reports, not Map.has_key?(r, "id"), do: {r["state"], r["msg"]}
+    assert {"working", "gating #12"} in root
+    assert {"working", "rolling #12"} in root
+    assert {"idle", "stopped: the queue is empty"} == List.last(root)
+    assert File.read!(Path.join(tmp, "status-ids")) == "pr-12\npr-13\n"
   end
 end
